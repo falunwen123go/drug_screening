@@ -101,12 +101,13 @@ class DrugModelTrainer:
             'val_metric': []
         }
         
-    def train_epoch(self, train_loader: DataLoader) -> Tuple[float, float]:
+    def train_epoch(self, train_loader: DataLoader, show_progress: bool = False) -> Tuple[float, float]:
         """
         训练一个epoch
         
         Args:
             train_loader: 训练数据加载器
+            show_progress: 是否显示进度条
             
         Returns:
             (平均loss, 平均指标)
@@ -116,7 +117,11 @@ class DrugModelTrainer:
         all_predictions = []
         all_targets = []
         
-        for batch_x, batch_y in tqdm(train_loader, desc='Training', leave=False):
+        # 简化进度条显示
+        loader = tqdm(train_loader, desc='Training', leave=False, ncols=80, 
+                      bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') if show_progress else train_loader
+        
+        for batch_x, batch_y in loader:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
             
@@ -141,12 +146,13 @@ class DrugModelTrainer:
         
         return avg_loss, metric
     
-    def validate(self, val_loader: DataLoader) -> Tuple[float, float]:
+    def validate(self, val_loader: DataLoader, show_progress: bool = False) -> Tuple[float, float]:
         """
         验证模型
         
         Args:
             val_loader: 验证数据加载器
+            show_progress: 是否显示进度条
             
         Returns:
             (平均loss, 平均指标)
@@ -157,7 +163,11 @@ class DrugModelTrainer:
         all_targets = []
         
         with torch.no_grad():
-            for batch_x, batch_y in tqdm(val_loader, desc='Validation', leave=False):
+            # 简化进度条显示
+            loader = tqdm(val_loader, desc='Validation', leave=False, ncols=80,
+                          bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') if show_progress else val_loader
+            
+            for batch_x, batch_y in loader:
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
                 
@@ -225,6 +235,8 @@ class DrugModelTrainer:
         """
         print(f"开始训练... Device: {self.device}")
         print(f"模型参数量: {sum(p.numel() for p in self.model.parameters()):,}")
+        print(f"训练配置: epochs={epochs}, early_stopping_patience={early_stopping_patience}")
+        print("-" * 70)
         
         # 早停
         early_stopping = None
@@ -233,12 +245,15 @@ class DrugModelTrainer:
         
         best_val_loss = float('inf')
         
-        for epoch in range(epochs):
+        # 使用tqdm显示总进度
+        epoch_pbar = tqdm(range(epochs), desc='Training', unit='epoch', ncols=100)
+        
+        for epoch in epoch_pbar:
             # 训练
-            train_loss, train_metric = self.train_epoch(train_loader)
+            train_loss, train_metric = self.train_epoch(train_loader, show_progress=False)
             
             # 验证
-            val_loss, val_metric = self.validate(val_loader)
+            val_loss, val_metric = self.validate(val_loader, show_progress=False)
             
             # 记录历史
             self.history['train_loss'].append(train_loss)
@@ -246,25 +261,29 @@ class DrugModelTrainer:
             self.history['train_metric'].append(train_metric)
             self.history['val_metric'].append(val_metric)
             
-            # 打印信息
-            metric_name = 'RMSE' if self.task_type == 'regression' else 'Accuracy'
-            print(f"Epoch {epoch+1}/{epochs} - "
-                  f"Train Loss: {train_loss:.4f}, Train {metric_name}: {train_metric:.4f} - "
-                  f"Val Loss: {val_loss:.4f}, Val {metric_name}: {val_metric:.4f}")
+            # 更新进度条描述
+            metric_name = 'RMSE' if self.task_type == 'regression' else 'Acc'
+            epoch_pbar.set_postfix({
+                'TrLoss': f'{train_loss:.4f}',
+                f'Tr{metric_name}': f'{train_metric:.4f}',
+                'ValLoss': f'{val_loss:.4f}',
+                f'Val{metric_name}': f'{val_metric:.4f}'
+            })
             
-            # 保存最佳模型
-            if save_best_model and val_loss < best_val_loss:
+            # 保存最佳模型 / 更新最佳损失
+            if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-                torch.save(self.model.state_dict(), model_save_path)
-                print(f"  ✓ 保存最佳模型到 {model_save_path}")
+                if save_best_model:
+                    os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+                    torch.save(self.model.state_dict(), model_save_path)
             
             # 早停检查
             if early_stopping and early_stopping(val_loss):
-                print(f"早停触发！在第 {epoch+1} 轮停止训练")
+                epoch_pbar.close()
+                print(f"\n早停触发！在第 {epoch+1} 轮停止训练 (best_val_loss={best_val_loss:.4f})")
                 break
         
-        print("\n训练完成！")
+        print(f"\n训练完成！最佳验证损失: {best_val_loss:.4f}")
         
     def predict(self, X: np.ndarray) -> np.ndarray:
         """

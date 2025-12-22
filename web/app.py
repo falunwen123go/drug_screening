@@ -271,8 +271,15 @@ def main():
             st.subheader("数据预览")
             st.dataframe(df.head(10))
             
-            # 选择SMILES列
-            smiles_col = st.selectbox("选择SMILES列", df.columns)
+            # 自动检测SMILES列
+            smiles_col_candidates = [col for col in df.columns if 'smiles' in col.lower()]
+            if smiles_col_candidates:
+                default_col_index = list(df.columns).index(smiles_col_candidates[0])
+            else:
+                default_col_index = 0
+            
+            # 选择SMILES列（带智能默认值）
+            smiles_col = st.selectbox("选择SMILES列", df.columns, index=default_col_index)
             
             # 筛选参数
             col1, col2, col3 = st.columns(3)
@@ -330,25 +337,56 @@ def main():
                         except Exception as e:
                             st.error(f"筛选失败: {e}")
         else:
-            st.info("请上传CSV文件开始批量筛选")
+            st.info("请上传CSV文件开始批量筛选，或下载示例数据进行测试")
             
-            # 示例CSV下载
-            example_data = {
-                'smiles': [
-                    'CC(=O)OC1=CC=CC=C1C(=O)O',
-                    'CN1C=NC2=C1C(=O)N(C(=O)N2C)C',
-                    'CC(C)CC1=CC=C(C=C1)C(C)C(=O)O'
-                ],
-                'name': ['Aspirin', 'Caffeine', 'Ibuprofen']
-            }
-            example_df = pd.DataFrame(example_data)
-            csv = example_df.to_csv(index=False)
-            st.download_button(
-                label="📥 下载示例CSV",
-                data=csv,
-                file_name="example_molecules.csv",
-                mime="text/csv"
-            )
+            # 尝试加载大型示例数据集
+            sample_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+                                       'data', 'sample', 'drug_library_1500.csv')
+            
+            if os.path.exists(sample_file):
+                # 读取示例数据
+                sample_df = pd.read_csv(sample_file)
+                st.success(f"📦 发现示例数据集: {len(sample_df)} 个分子")
+                
+                # 显示数据预览
+                with st.expander("预览示例数据"):
+                    st.dataframe(sample_df.head(20))
+                
+                # 下载完整数据集
+                csv_data = sample_df.to_csv(index=False)
+                st.download_button(
+                    label=f"📥 下载完整示例数据集 ({len(sample_df)} 分子)",
+                    data=csv_data,
+                    file_name="drug_library_sample.csv",
+                    mime="text/csv"
+                )
+            else:
+                # 备用小型示例CSV
+                example_data = {
+                    'smiles': [
+                        'CC(=O)OC1=CC=CC=C1C(=O)O',
+                        'CN1C=NC2=C1C(=O)N(C(=O)N2C)C',
+                        'CC(C)CC1=CC=C(C=C1)C(C)C(=O)O',
+                        'CC(=O)NC1=CC=C(C=C1)O',
+                        'CN(C)C(=N)NC(=N)N',
+                        'COc1ccc(CCN(C)C)cc1OC',
+                        'CC(C)NCC(O)COc1cccc2ccccc12',
+                        'CC1=CC=C(C=C1)NC(=O)C2=CC=C(C=C2)Cl',
+                        'COC1=CC=C(C=C1)C(=O)NC2=CC=CC=C2',
+                        'CC(C)NC(=O)C1=CC=C(C=C1)O'
+                    ],
+                    'name': ['Aspirin', 'Caffeine', 'Ibuprofen', 'Acetaminophen', 
+                             'Metformin', 'Verapamil', 'Propranolol', 'Compound_A',
+                             'Compound_B', 'Compound_C']
+                }
+                example_df = pd.DataFrame(example_data)
+                csv = example_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 下载小型示例CSV",
+                    data=csv,
+                    file_name="example_molecules.csv",
+                    mime="text/csv"
+                )
     
     # ==================== 数据集探索模式 ====================
     elif mode == "数据集探索":
