@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #4f46e5; /* Indigo 600 */
+}
+
+/* Custom Base Styles */
+body {
+  background-color: var(--color-gray-50);
+  color: var(--color-gray-900);
+}
