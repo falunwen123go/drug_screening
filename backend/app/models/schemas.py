@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
 class SinglePredictionRequest(BaseModel):
@@ -11,7 +11,6 @@ class MoleculeProperties(BaseModel):
     NumHDonors: int
     NumHAcceptors: int
     NumRotatableBonds: int
-    # Allow extra fields if MolecularFeaturizer returns more
     class Config:
         extra = "allow"
 
@@ -40,3 +39,15 @@ class BatchScreeningResponse(BaseModel):
     total_input: int
     total_screened: int
     results: List[ScreenedMolecule]
+
+class LoadModelRequest(BaseModel):
+    model_name: str = Field(..., description="Name of the model file to load (e.g., 'bbbp_model.pth')")
+
+class SystemInfoResponse(BaseModel):
+    status: str
+    device: str
+    current_model: Optional[str]
+    available_models: List[str]
+    cpu_info: Dict[str, Any]
+    memory_info: Dict[str, Any]
+    gpu_info: Optional[Dict[str, Any]] = None
