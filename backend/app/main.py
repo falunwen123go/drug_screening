@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from backend.app.core.config import logger
 from backend.app.services.ml_service import ml_service
-from backend.app.api.routers import health, predict, screen
+from backend.app.api.routers import health, predict, screen, system
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,6 +25,7 @@ async def root():
     return {"message": "Welcome to the Drug Screening System API"}
 
 app.include_router(health.router, tags=["Health"])
+app.include_router(system.router, prefix="/system", tags=["System"])
 app.include_router(predict.router, tags=["Prediction"])
 app.include_router(screen.router, tags=["Screening"])
 
