@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from features.feature_extraction import MolecularFeaturizer
-from models.drug_models import DrugPredictorMLP
+from models.drug_models import DrugPredictorMLP, DrugPredictorMLPv2
 from inference.predictor import DrugPredictor, DrugScreener
 
 
@@ -74,8 +74,15 @@ def load_model():
     try:
         device = get_device()
         
-        # 使用与训练时相同的模型配置
-        model = DrugPredictorMLP(input_dim=1024, hidden_dims=[512, 256, 128], output_dim=1)
+        # 使用与训练时相同的模型配置 - DrugPredictorMLPv2
+        # 模型结构: input_dim=1024, hidden_dims=[256, 128, 64], output_dim=1
+        model = DrugPredictorMLPv2(
+            input_dim=1024, 
+            hidden_dims=[256, 128, 64], 
+            output_dim=1,
+            dropout=0.5,
+            task_type='binary'
+        )
         
         # 加载训练好的模型权重
         model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
