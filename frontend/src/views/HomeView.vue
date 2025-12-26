@@ -8,6 +8,9 @@
       </p>
     </div>
 
+    <!-- Screening Funnel Diagram -->
+    <ScreeningFunnel />
+
     <div v-if="systemStore.loading && !systemStore.info" class="text-center py-12">
         <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
         <p class="mt-4 text-gray-500">正在获取系统信息...</p>
@@ -179,6 +182,7 @@
 <script setup lang="ts">
 import { onMounted, computed, ref, watch } from 'vue';
 import { useSystemStore } from '@/stores/system';
+import ScreeningFunnel from '@/components/ScreeningFunnel.vue';
 
 const systemStore = useSystemStore();
 const selectedModel = ref('');

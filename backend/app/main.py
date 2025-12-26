@@ -1,9 +1,11 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from backend.app.core.config import logger
-from backend.app.services.ml_service import ml_service
-from backend.app.api.routers import health, predict, screen, system
+from app.core.config import logger
+from app.services.ml_service import ml_service
+from app.api.routers import health, predict, screen, system, molecule
+from app.api.routers import dual_predict
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,6 +22,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Drug Screening System API"}
@@ -27,7 +38,9 @@ async def root():
 app.include_router(health.router, tags=["Health"])
 app.include_router(system.router, prefix="/system", tags=["System"])
 app.include_router(predict.router, tags=["Prediction"])
+app.include_router(dual_predict.router, tags=["Dual Prediction"])
 app.include_router(screen.router, tags=["Screening"])
+app.include_router(molecule.router, tags=["Molecule"])
 
 if __name__ == "__main__":
     import uvicorn

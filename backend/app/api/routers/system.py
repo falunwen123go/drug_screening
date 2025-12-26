@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
-from backend.app.services.ml_service import ml_service
-from backend.app.models.schemas import SystemInfoResponse, LoadModelRequest
+from app.services.ml_service import ml_service
+from app.models.schemas import SystemInfoResponse, LoadModelRequest
 
 router = APIRouter()
 

@@ -5,10 +5,10 @@ import platform
 from typing import Dict, Any, Optional, List
 
 # Ensure sys.path is set
-from backend.app.core.config import PROJECT_ROOT
+from app.core.config import PROJECT_ROOT
 
 from features.molecular_features import MolecularFeaturizer
-from models.drug_models import DrugPredictorMLP
+from models.drug_models import DrugPredictorMLP, DrugPredictorMLPv2
 from inference.predictor import DrugPredictor
 
 logger = logging.getLogger(__name__)
@@ -48,18 +48,44 @@ class MLService:
                 logger.error(f"Model file not found: {model_path}")
                 return False
 
-            # Model configuration
-            # WARNING: Assuming a fixed architecture for now. 
-            # Ideally, architecture config should be saved alongside weights (e.g., config.json).
-            model = DrugPredictorMLP(input_dim=1024, hidden_dims=[512, 256, 128], output_dim=1)
+            # 先加载state_dict检查模型类型
+            state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
             
-            state_dict = torch.load(model_path, map_location=self.device)
+            # 根据state_dict的键名判断模型类型
+            # DrugPredictorMLPv2 使用 'hidden_layers' 和 'output_layer'
+            # DrugPredictorMLP 使用 'network'
+            if any(k.startswith('hidden_layers') for k in state_dict.keys()):
+                # 使用 DrugPredictorMLPv2
+                # 从权重形状推断隐藏层维度
+                hidden_dims = []
+                layer_idx = 0
+                while f'hidden_layers.{layer_idx}.weight' in state_dict:
+                    weight_shape = state_dict[f'hidden_layers.{layer_idx}.weight'].shape
+                    hidden_dims.append(weight_shape[0])
+                    layer_idx += 4  # Linear, BatchNorm, ReLU, Dropout 每组4层
+                
+                # 获取输入维度
+                input_dim = state_dict['hidden_layers.0.weight'].shape[1]
+                # 获取输出维度
+                output_dim = state_dict['output_layer.weight'].shape[0]
+                
+                logger.info(f"Detected DrugPredictorMLPv2: input_dim={input_dim}, hidden_dims={hidden_dims}, output_dim={output_dim}")
+                model = DrugPredictorMLPv2(
+                    input_dim=input_dim, 
+                    hidden_dims=hidden_dims, 
+                    output_dim=output_dim,
+                    dropout=0.5,
+                    task_type='binary'
+                )
+            else:
+                # 使用原始 DrugPredictorMLP
+                logger.info("Detected DrugPredictorMLP")
+                model = DrugPredictorMLP(input_dim=1024, hidden_dims=[512, 256, 128], output_dim=1)
+            
             try:
                 model.load_state_dict(state_dict)
             except RuntimeError as e:
                 logger.error(f"State dict mismatch: {e}")
-                # Fallback: try strict=False or different architecture if needed
-                # For now, just fail
                 return False
 
             model = model.to(self.device)
@@ -74,6 +100,8 @@ class MLService:
             
         except Exception as e:
             logger.error(f"Failed to load model {model_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.predictor = None
             self.current_model_name = None
             return False
