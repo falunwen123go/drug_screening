@@ -119,21 +119,21 @@ def train_bbbp():
     input_dim = X_train.shape[1]
     model = DrugPredictorMLPv2(
         input_dim=input_dim,
-        hidden_dims=[256, 128, 64],  # 更小的网络减少过拟合
+        hidden_dims=[128, 64, 32],  # 更小的网络减少过拟合
         output_dim=1,
-        dropout=0.5,           # 更高的dropout
+        dropout=0.6,           # 更高的dropout防止过拟合
         use_batch_norm=True,
         activation='leaky_relu',
         task_type='binary'
     )
     
     param_count = sum(p.numel() for p in model.parameters())
-    print(f"  网络结构: {input_dim} -> 256 -> 128 -> 64 -> 1")
+    print(f"  网络结构: {input_dim} -> 128 -> 64 -> 32 -> 1")
     print(f"  总参数量: {param_count:,}")
-    print(f"  正则化: Dropout=0.5, BatchNorm, 渐进式Dropout")
+    print(f"  正则化: Dropout=0.6, BatchNorm, 渐进式Dropout")
     
-    # 5. 训练
-    print("\n[Step 5/6] 开始GPU加速训练...")
+    # 5. 训练 - 使用数据增强和Label Smoothing防止过拟合
+    print("\n[Step 5/6] 开始GPU加速训练（启用数据增强）...")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"  训练设备: {device}")
     if device == 'cuda':
@@ -142,20 +142,29 @@ def train_bbbp():
     trainer = DrugModelTrainer(
         model=model,
         device=device,
-        learning_rate=0.0005,  # 较低学习率避免过快收敛
-        weight_decay=1e-3,     # 较强L2正则化
+        learning_rate=0.0003,  # 更低学习率避免过快收敛
+        weight_decay=5e-3,     # 更强L2正则化
         task_type='binary',
         use_scheduler=True,
-        scheduler_type='plateau'
+        scheduler_type='plateau',
+        # 数据增强参数
+        use_data_augmentation=True,
+        noise_std=0.05,        # 添加高斯噪声
+        feature_dropout=0.15,  # 随机遮蔽15%特征
+        mixup_alpha=0.2,       # Mixup增强
+        label_smoothing=0.1    # 标签平滑
     )
+    
+    print(f"  数据增强: 高斯噪声(std=0.05), 特征遮蔽(15%), Mixup(alpha=0.2)")
+    print(f"  正则化: L2={5e-3}, Label Smoothing=0.1")
     
     os.makedirs('./saved_models', exist_ok=True)
     
     trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=150,            # 适度epochs
-        early_stopping_patience=25,  # 早停耐心值
+        epochs=100,            # 减少epochs，配合早停
+        early_stopping_patience=15,  # 更早停止防止过拟合
         save_best_model=True,
         model_save_path='./saved_models/bbbp_model.pth'
     )
@@ -211,7 +220,7 @@ def train_esol():
     print("\n" + "="*70)
     print("  ESOL 水溶解度预测模型训练")
     print("  Aqueous Solubility Prediction (Regression)")
-    print("  使用随机分割确保数据分布一致")
+    print("  使用特征缩放 + 数据增强防止过拟合")
     print("="*70)
     
     # 1. 数据加载 - 使用分层采样函数（回归任务会自动使用随机分割）
@@ -221,6 +230,7 @@ def train_esol():
     
     import io
     from contextlib import redirect_stdout, redirect_stderr
+    from sklearn.preprocessing import StandardScaler
     
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         X_train, y_train, X_valid, y_valid, X_test, y_test, tasks = \
@@ -235,61 +245,82 @@ def train_esol():
     
     print("  数据加载完成!")
     
-    # 2. 数据统计
-    print("\n[Step 2/6] 数据分布统计...")
-    print(f"  特征维度: {X_train.shape[1]}")
-    print(f"  训练集: {len(X_train)} 样本, 均值: {y_train.mean():.3f}")
-    print(f"  验证集: {len(X_valid)} 样本, 均值: {y_valid.mean():.3f}")
-    print(f"  测试集: {len(X_test)} 样本, 均值: {y_test.mean():.3f}")
-    print(f"  溶解度范围: [{y_train.min():.2f}, {y_train.max():.2f}] log mol/L")
+    # 2. 特征缩放 - 对小数据集非常重要
+    print("\n[Step 2/6] 特征预处理（StandardScaler缩放）...")
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_valid_scaled = scaler.transform(X_valid)
+    X_test_scaled = scaler.transform(X_test)
     
-    # 3. 创建数据加载器
+    # 同时对标签进行标准化（回归任务有帮助）
+    y_mean, y_std = y_train.mean(), y_train.std()
+    y_train_scaled = (y_train - y_mean) / y_std
+    y_valid_scaled = (y_valid - y_mean) / y_std
+    y_test_scaled = (y_test - y_mean) / y_std
+    
+    print(f"  特征维度: {X_train.shape[1]}")
+    print(f"  训练集: {len(X_train)} 样本, 原始均值: {y_train.mean():.3f}")
+    print(f"  验证集: {len(X_valid)} 样本, 原始均值: {y_valid.mean():.3f}")
+    print(f"  测试集: {len(X_test)} 样本, 原始均值: {y_test.mean():.3f}")
+    print(f"  溶解度范围: [{y_train.min():.2f}, {y_train.max():.2f}] log mol/L")
+    print(f"  标签标准化: mean={y_mean:.3f}, std={y_std:.3f}")
+    
+    # 3. 创建数据加载器（使用缩放后的数据）
     print("\n[Step 3/6] 创建数据加载器...")
     train_loader, val_loader = create_data_loaders(
-        X_train, y_train, X_valid, y_valid, batch_size=32
+        X_train_scaled, y_train_scaled, X_valid_scaled, y_valid_scaled, batch_size=32
     )
     
-    # 4. 创建增强版回归模型
-    print("\n[Step 4/6] 创建增强版回归模型...")
+    # 4. 创建更简单的回归模型 - 防止过拟合
+    print("\n[Step 4/6] 创建简化回归模型（防过拟合）...")
     input_dim = X_train.shape[1]
     model = DrugPredictorMLPv2(
         input_dim=input_dim,
-        hidden_dims=[256, 128, 64],  # 较小网络
+        hidden_dims=[64, 32],     # 更小的网络防止过拟合
         output_dim=1,
-        dropout=0.4,           # 适中dropout
+        dropout=0.5,              # 更高的dropout
         use_batch_norm=True,
         activation='leaky_relu',
         task_type='regression'
     )
     
-    print(f"  网络结构: {input_dim} -> 256 -> 128 -> 64 -> 1")
+    print(f"  网络结构: {input_dim} -> 64 -> 32 -> 1")
     print(f"  模型参数量: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"  正则化: Dropout=0.4, BatchNorm, 渐进式Dropout")
+    print(f"  正则化: Dropout=0.5, BatchNorm, 渐进式Dropout")
     
-    # 5. 训练
-    print("\n[Step 5/6] 开始训练...")
+    # 5. 训练 - 启用数据增强
+    print("\n[Step 5/6] 开始训练（启用数据增强）...")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     trainer = DrugModelTrainer(
         model=model,
         device=device,
-        learning_rate=0.0005,  # 适中学习率
-        weight_decay=5e-4,     # 较强L2正则化
+        learning_rate=0.0003,     # 更低学习率
+        weight_decay=1e-2,        # 更强L2正则化
         task_type='regression',
         use_scheduler=True,
-        scheduler_type='plateau'
+        scheduler_type='plateau',
+        # 数据增强参数
+        use_data_augmentation=True,
+        noise_std=0.1,            # 高斯噪声
+        feature_dropout=0.2,      # 特征遮蔽
+        mixup_alpha=0.1,          # Mixup（回归任务用较小alpha）
+        label_smoothing=0.0       # 回归任务不用label smoothing
     )
+    
+    print(f"  数据增强: 高斯噪声(std=0.1), 特征遮蔽(20%), Mixup(alpha=0.1)")
+    print(f"  正则化: L2={1e-2}, Dropout=0.5")
     
     trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
-        epochs=150,            # 适度epochs
-        early_stopping_patience=30,  # 早停耐心值
+        epochs=80,                # 减少epochs
+        early_stopping_patience=20,  # 更早停止
         save_best_model=True,
         model_save_path='./saved_models/esol_model.pth'
     )
     
-    # 6. 评估
+    # 6. 评估（需要反标准化预测结果）
     print("\n[Step 6/6] 模型评估...")
     model.load_state_dict(torch.load('./saved_models/esol_model.pth', 
                                      map_location=device, weights_only=True))
@@ -297,8 +328,11 @@ def train_esol():
     model.eval()
     
     with torch.no_grad():
-        X_test_tensor = torch.FloatTensor(X_test).to(device)
-        y_pred = model(X_test_tensor).cpu().numpy().flatten()
+        X_test_tensor = torch.FloatTensor(X_test_scaled).to(device)
+        y_pred_scaled = model(X_test_tensor).cpu().numpy().flatten()
+    
+    # 反标准化预测值
+    y_pred = y_pred_scaled * y_std + y_mean
     
     evaluator = ModelEvaluator()
     metrics = evaluator.evaluate_regression(y_test, y_pred)

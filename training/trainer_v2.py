@@ -61,7 +61,7 @@ class EarlyStopping:
 
 
 class DrugModelTrainer:
-    """药物模型训练器 V2 - 简洁版"""
+    """药物模型训练器 V2 - 简洁版（增强版：支持数据增强和正则化）"""
     
     def __init__(self,
                  model: nn.Module,
@@ -70,7 +70,14 @@ class DrugModelTrainer:
                  weight_decay: float = 1e-5,
                  task_type: str = 'regression',
                  use_scheduler: bool = True,
-                 scheduler_type: str = 'plateau'):
+                 scheduler_type: str = 'plateau',
+                 # 数据增强参数
+                 use_data_augmentation: bool = False,
+                 noise_std: float = 0.1,
+                 feature_dropout: float = 0.1,
+                 mixup_alpha: float = 0.0,
+                 # Label Smoothing参数
+                 label_smoothing: float = 0.0):
         """
         初始化训练器
         
@@ -82,6 +89,11 @@ class DrugModelTrainer:
             task_type: 任务类型 ('regression', 'binary', 'multiclass')
             use_scheduler: 是否使用学习率调度器
             scheduler_type: 调度器类型 ('plateau' or 'cosine')
+            use_data_augmentation: 是否使用数据增强
+            noise_std: 高斯噪声标准差
+            feature_dropout: 特征随机遮蔽比例
+            mixup_alpha: Mixup增强的alpha参数（0表示不使用）
+            label_smoothing: 标签平滑参数（0表示不使用）
         """
         self.model = model.to(device)
         self.device = device
@@ -89,13 +101,21 @@ class DrugModelTrainer:
         self.learning_rate = learning_rate
         self.use_scheduler = use_scheduler
         
-        # 损失函数
+        # 数据增强参数
+        self.use_data_augmentation = use_data_augmentation
+        self.noise_std = noise_std
+        self.feature_dropout = feature_dropout
+        self.mixup_alpha = mixup_alpha
+        self.label_smoothing = label_smoothing
+        
+        # 损失函数（支持Label Smoothing）
         if task_type == 'regression':
             self.criterion = nn.MSELoss()
         elif task_type == 'binary':
+            # 二分类使用自定义带平滑的BCE
             self.criterion = nn.BCEWithLogitsLoss()
         elif task_type == 'multiclass':
-            self.criterion = nn.CrossEntropyLoss()
+            self.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         else:
             raise ValueError(f"Unknown task type: {task_type}")
         
@@ -135,9 +155,62 @@ class DrugModelTrainer:
             'learning_rate': []
         }
         
+    def _apply_data_augmentation(self, batch_x: torch.Tensor, batch_y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        应用数据增强策略
+        
+        Args:
+            batch_x: 输入特征
+            batch_y: 标签
+            
+        Returns:
+            增强后的 (batch_x, batch_y)
+        """
+        if not self.use_data_augmentation:
+            return batch_x, batch_y
+        
+        # 1. 高斯噪声注入
+        if self.noise_std > 0:
+            noise = torch.randn_like(batch_x) * self.noise_std
+            batch_x = batch_x + noise
+        
+        # 2. 特征随机遮蔽（Feature Dropout）
+        if self.feature_dropout > 0:
+            mask = torch.bernoulli(torch.ones_like(batch_x) * (1 - self.feature_dropout))
+            batch_x = batch_x * mask / (1 - self.feature_dropout)  # 缩放以保持期望值
+        
+        # 3. Mixup增强（可选）
+        if self.mixup_alpha > 0:
+            batch_x, batch_y = self._mixup(batch_x, batch_y)
+        
+        return batch_x, batch_y
+    
+    def _mixup(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Mixup数据增强
+        """
+        lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
+        batch_size = x.size(0)
+        index = torch.randperm(batch_size).to(self.device)
+        
+        mixed_x = lam * x + (1 - lam) * x[index, :]
+        mixed_y = lam * y + (1 - lam) * y[index]
+        
+        return mixed_x, mixed_y
+    
+    def _apply_label_smoothing(self, y: torch.Tensor) -> torch.Tensor:
+        """
+        对二分类标签应用Label Smoothing
+        """
+        if self.task_type == 'binary' and self.label_smoothing > 0:
+            # 将0变成label_smoothing，将1变成1-label_smoothing
+            y = y * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
+        return y
+    
     def train_epoch(self, train_loader: DataLoader) -> Tuple[float, float]:
         """
         训练一个epoch（无进度条，静默模式）
+        支持数据增强和Label Smoothing
         
         Returns:
             (平均损失, 评估指标)
@@ -151,12 +224,18 @@ class DrugModelTrainer:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
             
+            # 应用数据增强
+            batch_x, batch_y = self._apply_data_augmentation(batch_x, batch_y)
+            
+            # 应用Label Smoothing
+            batch_y_smooth = self._apply_label_smoothing(batch_y)
+            
             # 前向传播
             self.optimizer.zero_grad()
             predictions = self.model(batch_x)
             
-            # 计算损失
-            loss = self.criterion(predictions.squeeze(), batch_y.squeeze())
+            # 计算损失（使用平滑后的标签）
+            loss = self.criterion(predictions.squeeze(), batch_y_smooth.squeeze())
             
             # 反向传播
             loss.backward()
@@ -166,10 +245,10 @@ class DrugModelTrainer:
             
             self.optimizer.step()
             
-            # 记录
+            # 记录（使用原始标签计算指标）
             total_loss += loss.item()
             all_predictions.extend(predictions.detach().cpu().numpy())
-            all_targets.extend(batch_y.cpu().numpy())
+            all_targets.extend(batch_y.cpu().numpy())  # 原始标签
         
         avg_loss = total_loss / len(train_loader)
         metric = self._calculate_metric(np.array(all_predictions), np.array(all_targets))
